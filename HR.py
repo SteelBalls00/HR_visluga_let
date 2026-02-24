@@ -6,6 +6,28 @@ import fdb
 from PyQt5 import QtWidgets, QtCore, QtGui
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+import base64
+
+SECRET_KEY = "HR_secret_key_2024"
+
+
+def encrypt_password(password: str) -> str:
+    data = password.encode("utf-8")
+    key = SECRET_KEY.encode("utf-8")
+
+    encrypted = bytes([b ^ key[i % len(key)] for i, b in enumerate(data)])
+    return base64.b64encode(encrypted).decode("utf-8")
+
+
+def decrypt_password(encoded: str) -> str:
+    try:
+        data = base64.b64decode(encoded.encode("utf-8"))
+        key = SECRET_KEY.encode("utf-8")
+
+        decrypted = bytes([b ^ key[i % len(key)] for i, b in enumerate(data)])
+        return decrypted.decode("utf-8")
+    except Exception:
+        return ""
 
 
 # ================= MODEL =================
@@ -142,11 +164,17 @@ class EmployeesModel(QtCore.QAbstractTableModel):
         if index.column() == 1:
             fio = value
 
+
         elif index.column() == 2:
-            try:
-                hire_date = datetime.datetime.strptime(value, "%d.%m.%Y").date()
-            except:
-                return False
+            if not value:
+                hire_date = None
+            else:
+                try:
+                    hire_date = datetime.datetime.strptime(
+                        value, "%d.%m.%Y"
+                    ).date()
+                except:
+                    return False
 
         elif index.column() == 5:
             note = value
@@ -226,19 +254,64 @@ class EmployeesModel(QtCore.QAbstractTableModel):
 class DateDelegate(QtWidgets.QStyledItemDelegate):
 
     def createEditor(self, parent, option, index):
-        editor = QtWidgets.QDateEdit(parent)
-        editor.setCalendarPopup(True)
-        editor.setDisplayFormat("dd.MM.yyyy")
-        editor.setDate(QtCore.QDate.currentDate())
+        editor = QtWidgets.QLineEdit(parent)
+        editor.setPlaceholderText("дд.мм.гггг")
         return editor
 
     def setEditorData(self, editor, index):
         text = index.data(QtCore.Qt.DisplayRole)
-        if text:
-            editor.setDate(QtCore.QDate.fromString(text, "dd.MM.yyyy"))
+        editor.setText(text if text else "")
 
     def setModelData(self, editor, model, index):
-        model.setData(index, editor.date().toString("dd.MM.yyyy"))
+        text = editor.text().strip()
+
+        # Пустая дата
+        if not text:
+            model.setData(index, "", QtCore.Qt.EditRole)
+            return
+
+        parsed = self.parse_date(text)
+
+        if parsed:
+            editor.setStyleSheet("")
+            model.setData(
+                index,
+                parsed.strftime("%d.%m.%Y"),
+                QtCore.Qt.EditRole
+            )
+        else:
+            # Подсветка ошибки (без всплывающего окна)
+            editor.setStyleSheet("border: 1px solid red;")
+
+    # -------- Умный парсинг --------
+
+    def parse_date(self, text):
+
+        text = text.strip()
+        text = text.replace("/", ".").replace("-", ".")
+
+        # 01022024
+        if text.isdigit() and len(text) == 8:
+            try:
+                return datetime.datetime.strptime(text, "%d%m%Y").date()
+            except:
+                return None
+
+        # 010224
+        if text.isdigit() and len(text) == 6:
+            try:
+                return datetime.datetime.strptime(text, "%d%m%y").date()
+            except:
+                return None
+
+        # 1.2.2024 / 01.02.24
+        for fmt in ("%d.%m.%Y", "%d.%m.%y"):
+            try:
+                return datetime.datetime.strptime(text, fmt).date()
+            except:
+                continue
+
+        return None
 
 
 # ================= WINDOW =================
@@ -256,13 +329,16 @@ class DbSettingsDialog(QtWidgets.QDialog):
         self.user_edit = QtWidgets.QLineEdit()
         self.pass_edit = QtWidgets.QLineEdit()
         self.pass_edit.setEchoMode(QtWidgets.QLineEdit.Password)
-        self.charset_edit = QtWidgets.QLineEdit("UTF8")
+        self.charset_edit = QtWidgets.QLineEdit("WIN1251")
+        self.port_edit = QtWidgets.QLineEdit("3050")
 
         layout.addRow("Хост:", self.host_edit)
         layout.addRow("Путь к БД:", self.path_edit)
         layout.addRow("Пользователь:", self.user_edit)
         layout.addRow("Пароль:", self.pass_edit)
         layout.addRow("Кодировка:", self.charset_edit)
+        layout.addRow("Порт:", self.port_edit)
+
 
         self.test_btn = QtWidgets.QPushButton("Проверить соединение")
         self.save_btn = QtWidgets.QPushButton("Сохранить")
@@ -282,16 +358,26 @@ class DbSettingsDialog(QtWidgets.QDialog):
         self.host_edit.setText(settings.value("db/host", ""))
         self.path_edit.setText(settings.value("db/path", ""))
         self.user_edit.setText(settings.value("db/user", ""))
-        self.pass_edit.setText(settings.value("db/password", ""))
-        self.charset_edit.setText(settings.value("db/charset", "UTF8"))
+
+        encrypted = settings.value("db/password", "")
+        self.pass_edit.setText(decrypt_password(encrypted))
+
+        self.charset_edit.setText(settings.value("db/charset", "WIN1251"))
+        self.port_edit.setText(settings.value("db/port", "3050"))
 
     def save_settings(self):
         settings = QtCore.QSettings("MyCompany", "HRApp")
         settings.setValue("db/host", self.host_edit.text())
         settings.setValue("db/path", self.path_edit.text())
         settings.setValue("db/user", self.user_edit.text())
-        settings.setValue("db/password", self.pass_edit.text())
+
+        settings.setValue(
+            "db/password",
+            encrypt_password(self.pass_edit.text())
+        )
+
         settings.setValue("db/charset", self.charset_edit.text())
+        settings.setValue("db/port", self.port_edit.text())
 
     def test_connection(self):
         try:
@@ -300,7 +386,7 @@ class DbSettingsDialog(QtWidgets.QDialog):
                 user=self.user_edit.text(),
                 password=self.pass_edit.text(),
                 charset=self.charset_edit.text(),
-                port=3050
+                port=int(self.port_edit.text())
             )
             QtWidgets.QMessageBox.information(self, "Успех", "Подключение успешно!")
         except Exception as e:
@@ -462,11 +548,15 @@ class ExperienceApp(QtWidgets.QMainWindow):
 
         settings = QtCore.QSettings("MyCompany", "HRApp")
 
-        host = settings.value("db/host", "")
-        path = settings.value("db/path", "")
-        user = settings.value("db/user", "")
-        password = settings.value("db/password", "")
-        charset = settings.value("db/charset", "UTF8")
+        host = settings.value("db/host", "192.168.0.250")
+        path = settings.value("db/path", r"c:\invent\HR.FDB")
+        user = settings.value("db/user", "sysdba")
+
+        encrypted = settings.value("db/password", encrypt_password("m"))
+        password = decrypt_password(encrypted)
+
+        charset = settings.value("db/charset", "WIN1251")
+        port = settings.value("db/port", 3050, type=int)
 
         if not host or not path:
             self.open_settings()
@@ -478,7 +568,7 @@ class ExperienceApp(QtWidgets.QMainWindow):
                 user=user,
                 password=password,
                 charset=charset,
-                port=3050
+                port=port
             )
             self.init_model()
 
@@ -600,20 +690,27 @@ class HighlightSettingsDialog(QtWidgets.QDialog):
     def load_settings(self):
         settings = QtCore.QSettings("MyCompany", "HRApp")
 
+        default_colors = {
+            15: "#e6ffcb",
+            20: "#d2feff",
+            25: "#ebefff",
+            30: "#fff4bc"
+        }
+
         for m in self.milestones:
-            color = settings.value(f"highlight/{m}", "#ffffff")
+            color = settings.value(f"highlight/{m}", default_colors[m])
             self.colors[m] = color
             self.buttons[m].setStyleSheet(f"background-color:{color}")
 
         self.month_checkbox.setChecked(
-            settings.value("highlight/month_enabled", False, type=bool)
+            settings.value("highlight/month_enabled", True, type=bool)
         )
         self.month_spin.setValue(
             settings.value("highlight/month_value", 6, type=int)
         )
         self.upcoming_color = settings.value(
             "highlight/upcoming_color",
-            "#ff8a80"
+            "#ffb0a6"
         )
 
         self.upcoming_color_btn.setStyleSheet(
