@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# pyinstaller --onefile --windowed --icon=HR_icon.ico --add-data "HR_icon.ico:." HR.py
 import sys
 import os
 import datetime
