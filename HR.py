@@ -482,7 +482,7 @@ class ExperienceApp(QtWidgets.QMainWindow):
         # ================= Таблица =================
         # ВАЖНО: таблица создаётся БЕЗ модели
         self.table = QtWidgets.QTableView()
-        self.table.setSortingEnabled(True)
+        # self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setSectionResizeMode(
             QtWidgets.QHeaderView.Stretch
         )
@@ -643,6 +643,31 @@ class ExperienceApp(QtWidgets.QMainWindow):
         self.search_edit.textChanged.connect(self.proxy.setFilterFixedString)
 
         self.table.setModel(self.proxy)
+        header = self.table.horizontalHeader()
+
+        # По умолчанию – интерактивный режим
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
+
+        # Колонка № — фиксированная
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 50)
+
+        # ФИО — растягиваем
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+
+        # Дата приема — фиксированная
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.Fixed)
+        self.table.setColumnWidth(2, 110)
+
+        # Стаж — фиксированная
+        header.setSectionResizeMode(3, QtWidgets.QHeaderView.Fixed)
+        self.table.setColumnWidth(3, 90)
+
+        # До выслуги — растягиваем
+        header.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
+
+        # Примечание — растягиваем
+        header.setSectionResizeMode(5, QtWidgets.QHeaderView.Stretch)
         self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
         self.table.setItemDelegateForColumn(2, DateDelegate())
