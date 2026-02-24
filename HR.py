@@ -1,4 +1,4 @@
-# pyinstaller --onefile --windowed --icon=HR_icon.ico --add-data "HR_icon.ico:." HR.py
+# pyinstaller --onefile --windowed --icon=HR_icon.ico --add-data "HR_icon.ico:." --add-data "fb_include/fbclient.dll:." --add-data "fb_include/firebird.msg:." --add-data "fb_include/icudt30.dll:." HR.py
 import sys
 import os
 import datetime
