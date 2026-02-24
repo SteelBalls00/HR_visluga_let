@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 import sys
+import os
 import datetime
 import fdb
 from PyQt5 import QtWidgets, QtCore, QtGui
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
 
 
 # ================= MODEL =================
@@ -49,7 +52,7 @@ class EmployeesModel(QtCore.QAbstractTableModel):
         if role == QtCore.Qt.DisplayRole or role == QtCore.Qt.EditRole:
 
             if col == 0:
-                return emp_id
+                return index.row() + 1
 
             if col == 1:
                 return fio
@@ -204,6 +207,19 @@ class EmployeesModel(QtCore.QAbstractTableModel):
 
         self.dataChanged.emit(top_left, bottom_right)
 
+    def delete_employee(self, source_row):
+
+        emp_id, fio, hire_date, note = self.rows[source_row]
+
+        self.cur.execute(
+            "DELETE FROM employees WHERE id = ?",
+            (emp_id,)
+        )
+        self.conn.commit()
+
+        self.layoutAboutToBeChanged.emit()
+        self.load()
+        self.layoutChanged.emit()
 
 # ================= DATE DELEGATE =================
 
@@ -299,13 +315,22 @@ class ExperienceApp(QtWidgets.QMainWindow):
 
     def __init__(self):
         super().__init__()
+
+        icon_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "HR_icon.ico"
+        )
+
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QtGui.QIcon(icon_path))
+
         self.conn = None
         self.init_ui()
         self.connect_to_database()
 
     def init_ui(self):
 
-        self.setWindowTitle("Учёт выслуги сотрудников (Model/View 2.0)")
+        self.setWindowTitle("Учёт выслуги судей")
         self.resize(1200, 650)
 
         central = QtWidgets.QWidget()
@@ -314,6 +339,7 @@ class ExperienceApp(QtWidgets.QMainWindow):
 
         # ================= Поиск =================
         self.search_edit = QtWidgets.QLineEdit()
+
         self.search_edit.setPlaceholderText("Поиск по всем столбцам...")
         layout.addWidget(self.search_edit)
 
@@ -332,6 +358,7 @@ class ExperienceApp(QtWidgets.QMainWindow):
 
         # ================= Меню =================
         menubar = self.menuBar()
+
         settings_menu = menubar.addMenu("Настройки")
 
         db_action = QtWidgets.QAction("Подключение к БД", self)
@@ -341,6 +368,84 @@ class ExperienceApp(QtWidgets.QMainWindow):
         highlight_action = QtWidgets.QAction("Выделение цветом", self)
         highlight_action.triggered.connect(self.open_highlight_settings)
         settings_menu.addAction(highlight_action)
+
+        # 👇 НОВОЕ МЕНЮ СПРАВА
+        export_menu = menubar.addMenu("Экспорт данных")
+
+        export_action = QtWidgets.QAction("В Excel", self)
+        export_action.triggered.connect(self.export_filtered_to_excel)
+        export_menu.addAction(export_action)
+
+    def export_filtered_to_excel(self):
+
+        if not hasattr(self, "proxy"):
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Нет данных для экспорта.")
+            return
+
+        documents_path = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.DocumentsLocation
+        )
+
+        if not documents_path:
+            documents_path = QtCore.QCoreApplication.applicationDirPath()
+
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
+        file_path = f"{documents_path}/Список_сотрудников_{today_str}.xlsx"
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Сотрудники"
+
+        headers = self.model.headers
+        ws.append(headers)
+
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+
+        for row in range(self.proxy.rowCount()):
+
+            row_data = []
+            row_color = None
+
+            for col in range(self.proxy.columnCount()):
+                index = self.proxy.index(row, col)
+                value = index.data(QtCore.Qt.DisplayRole)
+                row_data.append(value)
+
+                # Берём цвет из BackgroundRole
+                if col == 0:
+                    bg = index.data(QtCore.Qt.BackgroundRole)
+                    if isinstance(bg, QtGui.QColor):
+                        row_color = bg.name().replace("#", "")
+
+            ws.append(row_data)
+
+            excel_row_number = ws.max_row
+
+            if row_color:
+                fill = PatternFill(
+                    start_color=row_color,
+                    end_color=row_color,
+                    fill_type="solid"
+                )
+
+                for cell in ws[excel_row_number]:
+                    cell.fill = fill
+
+        # Автоширина колонок
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            ws.column_dimensions[column_letter].width = max_length + 2
+
+        wb.save(file_path)
+
+        QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl.fromLocalFile(file_path)
+        )
 
     def open_highlight_settings(self):
         dialog = HighlightSettingsDialog(self)
@@ -398,10 +503,42 @@ class ExperienceApp(QtWidgets.QMainWindow):
         self.search_edit.textChanged.connect(self.proxy.setFilterFixedString)
 
         self.table.setModel(self.proxy)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.open_context_menu)
         self.table.setItemDelegateForColumn(2, DateDelegate())
         self.table.setSortingEnabled(True)
 
         self.add_btn.clicked.connect(self.model.add_employee)
+
+    def open_context_menu(self, position):
+
+        index = self.table.indexAt(position)
+
+        if not index.isValid():
+            return
+
+        menu = QtWidgets.QMenu()
+
+        delete_action = menu.addAction("Удалить запись")
+
+        action = menu.exec_(self.table.viewport().mapToGlobal(position))
+
+        if action == delete_action:
+
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Подтверждение",
+                "Вы действительно хотите удалить выбранную запись?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            )
+
+            if reply == QtWidgets.QMessageBox.Yes:
+                # Переводим proxy row в source row
+                source_index = self.proxy.mapToSource(index)
+                source_row = source_index.row()
+
+                self.model.delete_employee(source_row)
+
 
 class HighlightSettingsDialog(QtWidgets.QDialog):
 
@@ -452,13 +589,14 @@ class HighlightSettingsDialog(QtWidgets.QDialog):
         self.load_settings()
 
     def choose_upcoming_color(self):
-        color = QtWidgets.QColorDialog.getColor()
+        current_color = QtGui.QColor(self.upcoming_color)
+        color = QtWidgets.QColorDialog.getColor(current_color, self)
+
         if color.isValid():
             self.upcoming_color = color.name()
             self.upcoming_color_btn.setStyleSheet(
                 f"background-color:{self.upcoming_color}"
             )
-
     def load_settings(self):
         settings = QtCore.QSettings("MyCompany", "HRApp")
 
@@ -483,7 +621,9 @@ class HighlightSettingsDialog(QtWidgets.QDialog):
         )
 
     def choose_color(self, milestone):
-        color = QtWidgets.QColorDialog.getColor()
+        current_color = QtGui.QColor(self.colors.get(milestone, "#ffffff"))
+        color = QtWidgets.QColorDialog.getColor(current_color, self)
+
         if color.isValid():
             self.colors[milestone] = color.name()
             self.buttons[milestone].setStyleSheet(
@@ -512,6 +652,14 @@ class HighlightSettingsDialog(QtWidgets.QDialog):
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
+
+    icon_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "HR_icon.ico"
+    )
+
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QtGui.QIcon(icon_path))
     window = ExperienceApp()
     window.show()
     sys.exit(app.exec_())
