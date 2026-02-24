@@ -3,6 +3,7 @@ import sys
 import os
 import datetime
 import fdb
+import re
 from PyQt5 import QtWidgets, QtCore, QtGui
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
@@ -287,29 +288,78 @@ class DateDelegate(QtWidgets.QStyledItemDelegate):
 
     def parse_date(self, text):
 
-        text = text.strip()
-        text = text.replace("/", ".").replace("-", ".")
+        text = text.lower().strip()
 
-        # 01022024
-        if text.isdigit() and len(text) == 8:
-            try:
-                return datetime.datetime.strptime(text, "%d%m%Y").date()
-            except:
-                return None
+        # Убираем слово "год"
+        text = re.sub(r"\bгод\b", "", text)
 
-        # 010224
-        if text.isdigit() and len(text) == 6:
-            try:
-                return datetime.datetime.strptime(text, "%d%m%y").date()
-            except:
-                return None
+        # ---------------- 1️⃣ Цифровые форматы ----------------
 
-        # 1.2.2024 / 01.02.24
-        for fmt in ("%d.%m.%Y", "%d.%m.%y"):
+        # 01022015
+        match = re.search(r"\b(\d{2})(\d{2})(\d{4})\b", text)
+        if match:
             try:
-                return datetime.datetime.strptime(text, fmt).date()
+                return datetime.date(
+                    int(match.group(3)),
+                    int(match.group(2)),
+                    int(match.group(1))
+                )
             except:
-                continue
+                pass
+
+        # 01.02.2015 / 01-02-2015 / 01/02/2015
+        match = re.search(
+            r"\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})\b",
+            text
+        )
+        if match:
+            day = int(match.group(1))
+            month = int(match.group(2))
+            year = int(match.group(3))
+
+            if year < 100:
+                year += 2000
+
+            try:
+                return datetime.date(year, month, day)
+            except:
+                pass
+
+        # ---------------- 2️⃣ Форматы с названием месяца ----------------
+
+        months = {
+            "январ": 1, "феврал": 2, "март": 3, "апрел": 4,
+            "мая": 5, "май": 5, "июн": 6, "июл": 7,
+            "август": 8, "сентябр": 9, "октябр": 10,
+            "ноябр": 11, "декабр": 12,
+
+            # английские
+            "january": 1, "february": 2, "march": 3,
+            "april": 4, "may": 5, "june": 6,
+            "july": 7, "august": 8,
+            "september": 9, "october": 10,
+            "november": 11, "december": 12
+        }
+
+        match = re.search(
+            r"\b(\d{1,2})\s+([а-яa-z]+)\s+(\d{2,4})\b",
+            text
+        )
+
+        if match:
+            day = int(match.group(1))
+            month_text = match.group(2)
+            year = int(match.group(3))
+
+            if year < 100:
+                year += 2000
+
+            for key in months:
+                if key in month_text:
+                    try:
+                        return datetime.date(year, months[key], day)
+                    except:
+                        pass
 
         return None
 
